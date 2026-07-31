@@ -4,9 +4,14 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/johnlin/user-service/database"
 	"github.com/johnlin/user-service/internal/user"
+
+	"os"
+	"os/signal"
+	"syscall"
 )
 
 func main() {
@@ -28,6 +33,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	defer pool.Close()
+
 	repo := user.NewPostgresRepository(pool)
 
 	service := user.NewService(repo)
@@ -39,11 +46,44 @@ func main() {
 	mux.HandleFunc("GET /users/{id}", handler.GetUser)
 	mux.HandleFunc("POST /users", handler.CreateUser)
 
-	log.Println("server running on :8080")
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: mux,
+	}
 
-	err = http.ListenAndServe(":8080", mux)
+	go func() {
+		log.Println("server running on :8080")
+
+		err := server.ListenAndServe()
+
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatal(err)
+		}
+	}()
+
+	quit := make(chan os.Signal, 1)
+
+	signal.Notify(
+		quit,
+		os.Interrupt,
+		syscall.SIGTERM,
+	)
+
+	<-quit
+	log.Println("shutting down server")
+
+	ctx, cancel := context.WithTimeout(
+		context.Background(),
+		10*time.Second,
+	)
+
+	defer cancel()
+
+	err = server.Shutdown(ctx)
 
 	if err != nil {
 		log.Fatal(err)
 	}
+
+	log.Println("server stopped")
 }
